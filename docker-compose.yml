@@ -1,0 +1,67 @@
+networks:
+  kafka-net:
+    name: kafka-net
+
+volumes:
+  kafka-data:
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: kafka
+    networks:
+      - kafka-net
+    ports:
+      # Listener exposto ao host - usado pelos apps Spring Boot (order-service,
+      # notification-service) rodando fora do Docker.
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      # ID fixo do cluster: evita reformatar o diretorio de dados (volume
+      # persistente) com um ID diferente em cada restart do container.
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+
+      # KRaft: este node acumula os papeis de broker e controller (single-node).
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Listener interno (rede docker, nome "kafka") + listener externo
+      # (host, "localhost:29092") + listener do controller.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Cluster single-node: replication factor 1 para topicos internos.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Topicos so sao criados explicitamente (bean NewTopic no order-service),
+      # nunca implicitamente por producers/consumers.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    networks:
+      - kafka-net
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: poc-kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy

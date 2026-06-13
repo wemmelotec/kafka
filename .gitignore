@@ -1,0 +1,28 @@
+# Maven
+target/
+*.jar
+*.war
+
+# Eclipse
+.classpath
+.project
+.settings/
+.factorypath
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+
+# VS Code
+.vscode/
+
+# Claude Code (configuracoes locais por maquina/usuario)
+.claude/settings.local.json
+
+# Logs
+*.log
+
+# Sistema operacional
+.DS_Store
+Thumbs.db

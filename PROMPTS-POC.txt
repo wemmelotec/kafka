@@ -1,0 +1,191 @@
+============================================================
+ROTEIRO DE PROMPTS - POC Kafka (order-service + notification-service)
+============================================================
+Cada bloco abaixo corresponde a UMA etapa. Use o prompt de
+"PROMPT" em uma sessão do Claude Code (dentro de
+C:\workspace_eclipse\kafka\) e, ao final, execute os itens em
+"COMO VALIDAR" antes de seguir para a próxima etapa.
+
+O plano completo (com mais detalhes/trade-offs) está em:
+C:\Users\wmagnom\.claude\plans\o-order-servixe-funcionou-n-o-encapsulated-snowflake.md
+
+------------------------------------------------------------
+ETAPA 1 - Infraestrutura Kafka (docker-compose)
+------------------------------------------------------------
+PROMPT:
+"Crie um arquivo docker-compose.yml na raiz de C:\workspace_eclipse\kafka\
+com um servico Kafka usando a imagem apache/kafka:3.8.0 em modo KRaft
+(sem Zookeeper): KAFKA_PROCESS_ROLES=broker,controller, listener interno
+(kafka:9092) para a rede docker e listener externo em localhost:29092
+para o host, KAFKA_CONTROLLER_QUORUM_VOTERS apontando para o proprio
+node, e auto.create.topics.enable=false (o topico sera criado pelo
+order-service na Etapa 2). Adicione um volume nomeado para persistencia.
+Tambem adicione um servico kafka-ui (imagem provectuslabs/kafka-ui) na
+porta 8081 apontando para kafka:9092."
+
+COMO VALIDAR:
+[ ] `docker compose up -d` sobe sem erros
+[ ] `docker compose ps` mostra o servico kafka como healthy/running
+[ ] Acessar http://localhost:8081 e ver o cluster Kafka listado no Kafka UI
+[ ] `docker exec -it <container_kafka> kafka-broker-api-versions --bootstrap-server localhost:9092`
+    retorna sem erro (broker respondendo)
+
+------------------------------------------------------------
+ETAPA 2 - order-service: producer Kafka real
+------------------------------------------------------------
+PROMPT:
+"No projeto order-service (C:\workspace_eclipse\kafka\order-service):
+1) Adicione a dependencia spring-kafka ao pom.xml (e spring-kafka-test
+   em scope test).
+2) Em application.properties, configure spring.kafka.bootstrap-servers=
+   localhost:29092, key-serializer=StringSerializer,
+   value-serializer=JsonSerializer, e a propriedade customizada
+   app.kafka.topic.order-created=orders.created.
+3) Crie a classe config/KafkaProducerConfig.java contendo: um bean
+   ObjectMapper com JavaTimeModule registrado (para serializar o Instant
+   occurredAt em ISO-8601) e um bean NewTopic para orders.created com
+   3 particoes e replication-factor 1.
+4) Substitua o stub em
+   adapters/out/messaging/KafkaOrderEventPublisher.java por uma
+   implementacao real usando KafkaTemplate<String, Object>, publicando
+   no topico configurado com key = event.orderId().toString().
+A interface OrderEventPublisher e o CreateOrderService nao devem mudar."
+
+COMO VALIDAR:
+[ ] `mvn spring-boot:run` inicia sem erros/exceptions de conexao com o Kafka
+[ ] No Kafka UI, o topico orders.created aparece com 3 particoes
+[ ] No PowerShell:
+    Invoke-RestMethod -Uri http://localhost:8080/api/orders -Method Post `
+      -ContentType "application/json" -Body '{"cpf":"123.456.789-00","salario":5000.00}'
+    retorna HTTP 201 com orderId e status=RECEIVED
+[ ] No Kafka UI (Topics > orders.created > Messages), a mensagem aparece com:
+    - key = orderId (UUID)
+    - value JSON com orderId, cpf, totalValue, occurredAt em formato
+      ISO-8601 (NAO como array de numeros - confirma o JavaTimeModule)
+[ ] Repetir o POST 3-4 vezes e ver, no Kafka UI, as mensagens distribuidas
+    entre as 3 particoes
+
+------------------------------------------------------------
+ETAPA 3 - notification-service (novo projeto, Consumer)
+------------------------------------------------------------
+PROMPT:
+"Crie um novo projeto Maven Spring Boot em
+C:\workspace_eclipse\kafka\notification-service (groupId com.poc,
+artifactId notification-service, Java 21, Spring Boot 3.5.0), com
+estrutura hexagonal espelhando o order-service:
+- domain/Notification.java (record, com factory from(OrderCreatedEvent))
+- application/port/out/NotificationSender.java (interface send(Notification))
+- application/port/in/OrderCreatedHandler.java (interface handle(OrderCreatedEvent))
+- application/service/OrderCreatedHandlerService.java (@Service, injeta
+  NotificationSender, converte o evento em Notification e envia)
+- adapters/out/notification/LogNotificationSender.java (@Component, loga
+  a notificacao)
+- adapters/in/messaging/OrderCreatedEvent.java (DTO do evento recebido,
+  com os MESMOS campos/tipos do OrderCreatedEvent do order-service:
+  orderId, cpf, totalValue, occurredAt)
+- adapters/in/messaging/OrderCreatedKafkaListener.java (@Component com
+  @KafkaListener(topics = '${app.kafka.topic.order-created}',
+  groupId = '${spring.kafka.consumer.group-id}'), delega para
+  OrderCreatedHandler)
+Dependencias: spring-kafka, spring-boot-starter, spring-boot-starter-test,
+spring-kafka-test (test).
+application.properties: spring.application.name=notification-service,
+spring.kafka.bootstrap-servers=localhost:29092,
+spring.kafka.consumer.group-id=notification-service,
+auto-offset-reset=earliest, key-deserializer=StringDeserializer,
+value-deserializer com ErrorHandlingDeserializer envolvendo
+JsonDeserializer, spring.json.trusted.packages apontando para o pacote
+do DTO, spring.json.value.default.type apontando para
+adapters.in.messaging.OrderCreatedEvent, app.kafka.topic.order-created=
+orders.created. Garanta JavaTimeModule no ObjectMapper usado pelo
+JsonDeserializer para desserializar Instant corretamente."
+
+COMO VALIDAR:
+[ ] `mvn spring-boot:run` no notification-service sobe sem erros
+[ ] No Kafka UI (Consumers), o group "notification-service" aparece com
+    as 3 particoes atribuidas, estado Stable
+[ ] Disparar um novo POST /api/orders no order-service (ver Etapa 2)
+[ ] No log do notification-service aparece uma linha do tipo
+    "[NOTIFICATION] Pedido <orderId> ... notificacao enviada" com o
+    MESMO orderId retornado pelo POST
+[ ] Nenhum erro de deserializacao (DeserializationException) aparece no log
+
+------------------------------------------------------------
+ETAPA 4 - Testes automatizados (unitarios + Testcontainers)
+------------------------------------------------------------
+PROMPT:
+"Em order-service e notification-service, adicione testes:
+1) Unitarios de dominio: Order, OrderItem, OrderCreatedEvent (e
+   Notification no notification-service) - validacoes e factories.
+2) Unitarios de aplicacao com Mockito: CreateOrderServiceTest
+   (verifica que createOrder() chama publisher.publish(...)) e
+   OrderCreatedHandlerServiceTest (verifica que handle() chama
+   notificationSender.send(...)).
+3) Integracao com Testcontainers (org.testcontainers:kafka, scope test):
+   - order-service: KafkaOrderEventPublisherIT sobe um KafkaContainer,
+     sobrescreve spring.kafka.bootstrap-servers via
+     @DynamicPropertySource, publica um evento e confirma payload/key
+     no topico real.
+   - notification-service: OrderCreatedKafkaListenerIT sobe um
+     KafkaContainer, publica uma mensagem de teste no topico e usa
+     Awaitility para confirmar que o NotificationSender (mockado) foi
+     chamado."
+
+COMO VALIDAR:
+[ ] `mvn test` no order-service: todos os testes passam (Docker precisa
+    estar rodando para os testes com Testcontainers)
+[ ] `mvn test` no notification-service: todos os testes passam
+[ ] Os testes com Testcontainers funcionam mesmo com o docker-compose da
+    Etapa 1 PARADO (Testcontainers sobe seu proprio Kafka efemero)
+
+------------------------------------------------------------
+ETAPA 5 - Roteiro de validacao end-to-end (manual)
+------------------------------------------------------------
+PROMPT:
+"Crie um arquivo TESTE-E2E.md na raiz de C:\workspace_eclipse\kafka\
+documentando o passo a passo completo para validar a POC do zero:
+subir o docker-compose, rodar order-service e notification-service,
+comandos PowerShell (Invoke-RestMethod) para disparar pedidos, e o que
+observar em cada log/Kafka UI a cada passo."
+
+COMO VALIDAR:
+[ ] Seguir o roteiro escrito do zero (ambiente limpo: `docker compose down -v`
+    antes de comecar) e confirmar que cada passo se comporta exatamente
+    como documentado
+[ ] orderId retornado pelo POST aparece tanto no log de publicacao do
+    order-service quanto no log de notificacao do notification-service
+
+------------------------------------------------------------
+ETAPA 6 - Organizacao (git + README)
+------------------------------------------------------------
+PROMPT:
+"Inicialize um repositorio git na raiz de C:\workspace_eclipse\kafka\
+(cobrindo order-service, notification-service e docker-compose.yml).
+Crie um .gitignore para Maven/Eclipse (target/, .classpath, .project,
+.settings/). Crie um README.md documentando: visao geral da POC,
+diagrama de arquitetura, pre-requisitos (Java 21, Maven, Docker), como
+subir a infraestrutura e os servicos, o roteiro de teste (TESTE-E2E.md)
+e as decisoes de arquitetura (KRaft, contrato de evento duplicado entre
+os servicos, JSON em vez de Avro) com uma secao de proximos
+passos/melhorias."
+
+COMO VALIDAR:
+[ ] `git status` limpo apos o commit inicial
+[ ] `git log` mostra o(s) commit(s)
+[ ] README.md renderiza corretamente e os comandos nele documentados
+    funcionam quando executados
+
+------------------------------------------------------------
+ETAPA 7 (OPCIONAL/BACKLOG) - Melhorias futuras
+------------------------------------------------------------
+Sem prompt fechado - escolher conforme prioridade quando for o caso:
+- Error handling/retry/DLQ no consumer (DefaultErrorHandler +
+  DeadLetterPublishingRecoverer); tratar o CompletableFuture do
+  kafkaTemplate.send() no producer.
+- Persistencia de Order (JPA + H2/Postgres) via novo adapter de saida.
+- Observabilidade (Actuator, metricas Kafka via Micrometer, correlacao
+  de orderId nos logs).
+- Evoluir contrato do evento para modulo compartilhado ou Avro/Schema
+  Registry.
+- Dockerizar os dois servicos Spring Boot (habilita e2e automatizado
+  real com docker-compose).
