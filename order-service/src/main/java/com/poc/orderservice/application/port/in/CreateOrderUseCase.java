@@ -1,6 +1,6 @@
 package com.poc.orderservice.application.port.in;
 
-import com.poc.orderservice.domain.Order;
+import com.poc.orderservice.application.domain.Order;
 
 /**
  * Input port: contrato do caso de uso de criação de pedido.

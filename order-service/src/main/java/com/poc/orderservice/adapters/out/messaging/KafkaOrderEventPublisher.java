@@ -1,7 +1,7 @@
 package com.poc.orderservice.adapters.out.messaging;
 
+import com.poc.orderservice.application.domain.OrderCreatedEvent;
 import com.poc.orderservice.application.port.out.OrderEventPublisher;
-import com.poc.orderservice.domain.OrderCreatedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

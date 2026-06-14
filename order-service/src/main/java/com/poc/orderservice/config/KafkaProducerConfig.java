@@ -22,7 +22,7 @@ import java.util.Map;
  * <p>Motivo: o construtor padrão de {@link JsonSerializer} (usado quando o
  * serializer é apenas referenciado por nome de classe via propriedades) não
  * registra o {@code JavaTimeModule}. Isso faz com que {@code Instant
- * occurredAt} de {@link com.poc.orderservice.domain.OrderCreatedEvent} seja
+ * occurredAt} de {@link com.poc.orderservice.application.domain.OrderCreatedEvent} seja
  * serializado como timestamp numérico (ex: {@code 1781369447.1906019}) em vez
  * de ISO-8601 - comportamento confirmado empiricamente ao validar esta etapa.
  * Por isso o {@link JsonSerializer} é construído aqui com um

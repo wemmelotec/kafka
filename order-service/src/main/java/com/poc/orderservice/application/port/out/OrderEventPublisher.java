@@ -1,6 +1,6 @@
 package com.poc.orderservice.application.port.out;
 
-import com.poc.orderservice.domain.OrderCreatedEvent;
+import com.poc.orderservice.application.domain.OrderCreatedEvent;
 
 /**
  * Output port: contrato para publicação de eventos de domínio relacionados

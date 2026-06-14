@@ -1,4 +1,4 @@
-package com.poc.orderservice.domain;
+package com.poc.orderservice.application.domain;
 
 import java.math.BigDecimal;
 import java.time.Instant;

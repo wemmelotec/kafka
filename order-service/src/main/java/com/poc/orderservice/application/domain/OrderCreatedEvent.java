@@ -1,13 +1,12 @@
-package com.poc.orderservice.domain;
+package com.poc.orderservice.application.domain;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Evento de domínio que representa a criação de um pedido. Esta etapa não
- * publica o evento em nenhum broker real — a representação existe para que o
- * port de saída ({@code OrderEventPublisher}) tenha um contrato estável desde já.
+ * Evento de domínio que representa a criação de um pedido, publicado pelo
+ * {@code OrderEventPublisher} no tópico {@code orders.created}.
  */
 public record OrderCreatedEvent(UUID orderId, String cpf, BigDecimal totalValue, Instant occurredAt) {
 

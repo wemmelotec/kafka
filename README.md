@@ -36,6 +36,19 @@ kafka/
 ├── .gitignore               # Ignora target/, metadados de IDE, configs locais (Eclipse/IntelliJ/VSCode/Claude)
 ├── docker-compose.yml      # Infraestrutura Kafka (Etapa 1)
 ├── order-service/          # Producer (Etapa 2)
+│   └── src/main/java/com/poc/orderservice/
+│       ├── OrderServiceApplication.java
+│       ├── application/              # "core" hexagonal (domínio + casos de uso)
+│       │   ├── domain/                   # Order, OrderItem, OrderCreatedEvent
+│       │   ├── port/
+│       │   │   ├── in/                   # CreateOrderCommand, CreateOrderUseCase
+│       │   │   └── out/                  # OrderEventPublisher
+│       │   └── service/                  # CreateOrderService (@UseCase)
+│       ├── adapters/
+│       │   ├── in/web/                   # OrderController, DTOs (REST)
+│       │   └── out/messaging/            # KafkaOrderEventPublisher
+│       ├── config/                       # KafkaTopicConfig, KafkaProducerConfig
+│       └── util/                         # UseCase (meta-anotação @UseCase = @Component)
 ├── notification-service/   # Consumer (Etapa 3 - ainda não criado)
 ├── PROMPTS-POC.txt          # Roteiro de prompts para evoluir a POC por etapas
 └── README.md                # Este arquivo
@@ -249,6 +262,98 @@ Correção aplicada:
 > como artefato do "antes da correção" — fica como evidência real do
 > problema encontrado e da correção aplicada, útil para quem revisar esta
 > POC de estudo depois.
+
+Próximo passo: **Etapa 3** — criar o `notification-service` (novo projeto
+Maven, Consumer) para consumir o tópico `orders.created` e logar a
+notificação recebida.
+
+### Organização - alinhamento com projeto de referência (agenda-hexagonal) ✅
+
+**Motivação**: o usuário comparou `order-service` com outro projeto de
+estudo, `agenda-hexagonal` (`C:\workspace_eclipse\agenda-hexagonal`), também
+sobre Arquitetura Hexagonal. A comparação revelou duas divergências entre os
+"cores" dos dois projetos.
+
+**Análise SOLID feita antes de refatorar** (revisão do código existente de
+`order-service`):
+
+| Princípio | Situação antes da refatoração |
+|---|---|
+| DIP | Já correto — `CreateOrderService` depende de `OrderEventPublisher`/`CreateOrderUseCase` (abstrações), nunca de `KafkaOrderEventPublisher` |
+| ISP | Já satisfeito — `CreateOrderUseCase` tem um único método; ao crescer, seguir o padrão de interfaces segregadas de `agenda-hexagonal` (`ListarContatosUseCase`, `BuscarContatoUseCase`, etc.) |
+| SRP/OCP | Já correto — cada classe com responsabilidade única; novos adapters de saída não exigem alterar `CreateOrderService` |
+| Domínio (`Order`, `OrderItem`, `OrderCreatedEvent`) | Já eram records imutáveis, sem dependência de framework |
+
+Conclusão: as **duas únicas divergências reais** eram a localização do
+pacote `domain` e o uso de `@Service` em vez de uma anotação que isolasse o
+Spring do core. As duas foram corrigidas nesta etapa.
+
+**Mudança 1 — pacote `domain` movido para dentro de `application`**
+
+`com.poc.orderservice.domain` → `com.poc.orderservice.application.domain`
+(`Order.java`, `OrderItem.java`, `OrderCreatedEvent.java`). Em
+`agenda-hexagonal`, `application/` representa todo o "hexágono" (domínio +
+ports + casos de uso) e `domain` é um sub-pacote dele; `order-service`
+agora segue a mesma convenção. Pacote antigo `com.poc.orderservice.domain`
+removido.
+
+Imports/javadocs `{@link}` atualizados em:
+- `application/port/in/CreateOrderUseCase.java`
+- `application/port/out/OrderEventPublisher.java`
+- `application/service/CreateOrderService.java`
+- `adapters/in/web/OrderController.java`
+- `adapters/out/messaging/KafkaOrderEventPublisher.java`
+- `config/KafkaProducerConfig.java` (referência fully-qualified em javadoc)
+
+**Mudança 2 — meta-anotação `util/UseCase.java` (isola o Spring do core)**
+
+Novo arquivo `com.poc.orderservice.util.UseCase`:
+`@Target(TYPE) @Retention(RUNTIME) @Documented @Component public @interface UseCase {}`
+— espelha o `util/UseCase.java` de `agenda-hexagonal`.
+
+`application/service/CreateOrderService.java` passou a usar `@UseCase` em
+vez de `@Service` (`org.springframework.stereotype.Service`). O Spring
+continua reconhecendo a classe como bean (herança de anotação: `@UseCase`
+carrega `@Component`), mas o pacote `application/` deixa de ter qualquer
+import de `org.springframework.*` — o único import de Spring do core fica
+concentrado em `util/UseCase.java`, fora de `application/`. Isso permite, no
+futuro, testar `CreateOrderService` instanciando-o diretamente com um mock
+de `OrderEventPublisher`, sem subir contexto Spring. Optou-se por
+`@Component` (estereótipo genérico) e não `@Service` como anotação embutida,
+pois `@Service` carrega semântica de "camada de serviço" do MVC que não
+existe na Arquitetura Hexagonal.
+
+**Mudança 3 — clean code**
+
+`adapters/in/web/OrderController.java`: normalizada a indentação do
+construtor e do método `create` (havia tabs e linhas em branco
+inconsistentes), sem mudança de comportamento.
+
+**Estrutura final do core (`application/`) e novo pacote `util/`**:
+
+```
+order-service/src/main/java/com/poc/orderservice/
+├── application/
+│   ├── domain/                 # NOVO local (antes: com.poc.orderservice.domain, pacote irmão)
+│   │   ├── Order.java
+│   │   ├── OrderItem.java
+│   │   └── OrderCreatedEvent.java
+│   ├── port/
+│   │   ├── in/  (CreateOrderCommand, CreateOrderUseCase)
+│   │   └── out/ (OrderEventPublisher)
+│   └── service/
+│       └── CreateOrderService.java   # @UseCase em vez de @Service
+└── util/
+    └── UseCase.java               # NOVO - meta-anotação @UseCase = @Component
+```
+
+**Validação realizada**:
+
+| Verificação | Resultado |
+|---|---|
+| Busca por referências ao pacote antigo `com.poc.orderservice.domain` | Nenhuma ocorrência restante |
+| `mvn -q -DskipTests compile` | OK, sem erros |
+| Restart manual do order-service + `POST /api/orders` (feito pelo usuário) | HTTP 201, evento publicado normalmente no Kafka — comportamento idêntico ao pré-refatoração |
 
 Próximo passo: **Etapa 3** — criar o `notification-service` (novo projeto
 Maven, Consumer) para consumir o tópico `orders.created` e logar a
